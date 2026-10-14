@@ -1,0 +1,873 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────
+
+enum Role {
+  CUSTOMER
+  OWNER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+enum PriceRange {
+  BUDGET
+  MODERATE
+  MID_RANGE
+  PREMIUM
+  LUXURY
+}
+
+// Controls public visibility. Only APPROVED restaurants appear publicly.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Set by admins only. Owners can never verify themselves.
+enum VerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum OperatingStatus {
+  OPEN
+  TEMPORARILY_CLOSED
+  PERMANENTLY_CLOSED
+}
+
+enum ModerationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ImageType {
+  COVER
+  LOGO
+  INTERIOR
+  EXTERIOR
+  FOOD
+  DRINKS
+  EVENT
+  AMBIENCE
+}
+
+enum AmenityCategory {
+  FACILITY
+  DIETARY
+  ENTERTAINMENT
+}
+
+enum StaffRole {
+  OWNER
+  MANAGER
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum SpecialHoursType {
+  SPECIAL
+  HOLIDAY
+}
+
+enum ReviewStatus {
+  PUBLISHED
+  PENDING
+  HIDDEN
+  REMOVED
+}
+
+enum EventCategory {
+  LIVE_MUSIC
+  DJ_NIGHT
+  FOOD_FESTIVAL
+  THEMED_NIGHT
+  COMEDY
+  CULTURAL
+  SPECIAL_DINING
+  SPORTS_VIEWING
+  OTHER
+}
+
+enum NotificationType {
+  NEW_RESTAURANT_IN_AREA
+  RESTAURANT_UPDATE
+  NEW_OFFER
+  NEW_EVENT
+  REVIEW_RESPONSE
+  CLAIM_UPDATE
+  VERIFICATION_UPDATE
+  ANNOUNCEMENT
+}
+
+enum ReportTargetType {
+  RESTAURANT
+  REVIEW
+  IMAGE
+}
+
+enum ReportReason {
+  INCORRECT_INFORMATION
+  CLOSED_RESTAURANT
+  DUPLICATE_LISTING
+  FAKE_RESTAURANT
+  INCORRECT_MENU
+  WRONG_LOCATION
+  INAPPROPRIATE_IMAGES
+  ABUSIVE_REVIEW
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  DISMISSED
+}
+
+enum EmailTokenType {
+  VERIFY_EMAIL
+  RESET_PASSWORD
+}
+
+enum AnalyticsEventType {
+  PROFILE_VIEW
+  MENU_VIEW
+  SEARCH_IMPRESSION
+  SEARCH_CLICK
+  OFFER_VIEW
+  EVENT_VIEW
+  DIRECTIONS_CLICK
+  CALL_CLICK
+  SHARE_CLICK
+}
+
+// ─────────────────────────────────────────────────────────────
+// Geography (multi-city ready)
+// ─────────────────────────────────────────────────────────────
+
+model City {
+  id        String   @id @default(cuid())
+  name      String
+  slug      String   @unique
+  country   String   @default("KE")
+  latitude  Float
+  longitude Float
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  areas       Area[]
+  restaurants Restaurant[]
+}
+
+model Area {
+  id        String   @id @default(cuid())
+  cityId    String
+  name      String
+  slug      String
+  latitude  Float?
+  longitude Float?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  city           City            @relation(fields: [cityId], references: [id])
+  restaurants    Restaurant[]
+  savedLocations SavedLocation[]
+
+  @@unique([cityId, slug])
+  @@index([cityId, isActive])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Authentication
+// ─────────────────────────────────────────────────────────────
+
+model User {
+  id              String     @id @default(cuid())
+  email           String     @unique
+  passwordHash    String
+  name            String
+  phone           String?
+  avatarUrl       String?
+  role            Role       @default(CUSTOMER)
+  status          UserStatus @default(ACTIVE)
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  deletedAt       DateTime?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  refreshTokens     RefreshToken[]
+  emailTokens       EmailToken[]
+  preference        UserPreference?
+  savedLocations    SavedLocation[]
+  favorites         Favorite[]
+  recentlyViewed    RecentlyViewed[]
+  searchHistory     SearchHistory[]
+  reviews           Review[]          @relation("ReviewAuthor")
+  reviewVotes       ReviewHelpfulVote[]
+  notifications     Notification[]
+  staffRoles        RestaurantStaff[]
+  claims            RestaurantClaim[] @relation("ClaimRequester")
+  claimsReviewed    RestaurantClaim[] @relation("ClaimReviewer")
+  verificationsRequested VerificationRequest[] @relation("VerificationRequester")
+  verificationsReviewed  VerificationRequest[] @relation("VerificationReviewer")
+  reportsFiled      Report[]          @relation("ReportReporter")
+  reportsResolved   Report[]          @relation("ReportResolver")
+  auditLogs         AuditLog[]
+  uploadedImages    RestaurantImage[]
+
+  @@index([role, status])
+  @@index([deletedAt])
+}
+
+// Refresh tokens are stored hashed. `familyId` groups a rotation chain so a
+// reused (stolen) token can revoke the whole family.
+model RefreshToken {
+  id           String    @id @default(cuid())
+  userId       String
+  tokenHash    String    @unique
+  familyId     String
+  expiresAt    DateTime
+  revokedAt    DateTime?
+  replacedById String?
+  userAgent    String?
+  ipAddress    String?
+  createdAt    DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@index([expiresAt])
+}
+
+// One-time tokens for email verification and password reset (stored hashed).
+model EmailToken {
+  id        String         @id @default(cuid())
+  userId    String
+  type      EmailTokenType
+  tokenHash String         @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime       @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([expiresAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Restaurants
+// ─────────────────────────────────────────────────────────────
+
+model Restaurant {
+  id               String             @id @default(cuid())
+  slug             String             @unique
+  name             String
+  shortDescription String?
+  description      String?
+  cityId           String
+  areaId           String
+  address          String
+  landmark         String?
+  latitude         Float
+  longitude        Float
+  priceRange       PriceRange
+  phone            String?
+  email            String?
+  website          String?
+  instagramUrl     String?
+  facebookUrl      String?
+  twitterUrl       String?
+  tiktokUrl        String?
+  logoUrl          String?
+  coverUrl         String?
+  parkingInfo      String?
+  accessibilityInfo String?
+
+  approvalStatus     ApprovalStatus     @default(PENDING)
+  verificationStatus VerificationStatus @default(PENDING)
+  operatingStatus    OperatingStatus    @default(OPEN)
+  verifiedAt         DateTime?
+  isFeatured         Boolean            @default(false)
+  isDemo             Boolean            @default(false)
+
+  // Denormalised counters kept in sync by the application.
+  averageRating  Float @default(0)
+  reviewCount    Int   @default(0)
+  favoriteCount  Int   @default(0)
+  viewCount      Int   @default(0)
+
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  city   City @relation(fields: [cityId], references: [id])
+  area   Area @relation(fields: [areaId], references: [id])
+
+  images         RestaurantImage[]
+  staff          RestaurantStaff[]
+  claims         RestaurantClaim[]
+  verifications  VerificationRequest[]
+  cuisines       RestaurantCuisine[]
+  vibes          RestaurantVibe[]
+  amenities      RestaurantAmenity[]
+  openingPeriods OpeningPeriod[]
+  specialHours   SpecialHours[]
+  menus          Menu[]
+  favorites      Favorite[]
+  recentlyViewed RecentlyViewed[]
+  reviews        Review[]
+  offers         Offer[]
+  events         Event[]
+  reports        Report[]
+  analyticsEvents AnalyticsEvent[]
+
+  @@index([cityId, areaId])
+  @@index([approvalStatus, deletedAt])
+  @@index([priceRange])
+  @@index([averageRating])
+  @@index([isFeatured])
+  @@index([createdAt])
+  @@index([latitude, longitude])
+}
+
+model RestaurantImage {
+  id           String           @id @default(cuid())
+  restaurantId String
+  url          String
+  publicId     String?
+  type         ImageType        @default(FOOD)
+  caption      String?
+  sortOrder    Int              @default(0)
+  status       ModerationStatus @default(APPROVED)
+  uploadedById String?
+  createdAt    DateTime         @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  uploadedBy User?      @relation(fields: [uploadedById], references: [id], onDelete: SetNull)
+  reports    Report[]
+
+  @@index([restaurantId, type, sortOrder])
+}
+
+model RestaurantStaff {
+  id           String    @id @default(cuid())
+  restaurantId String
+  userId       String
+  role         StaffRole @default(MANAGER)
+  createdAt    DateTime  @default(now())
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, userId])
+  @@index([userId])
+}
+
+model RestaurantClaim {
+  id            String        @id @default(cuid())
+  restaurantId  String
+  userId        String
+  status        RequestStatus @default(PENDING)
+  businessRole  String
+  contactPhone  String?
+  message       String?
+  documentUrls  String[]
+  reviewedById  String?
+  reviewedAt    DateTime?
+  reviewNote    String?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  user       User       @relation("ClaimRequester", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User?      @relation("ClaimReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, status])
+  @@index([userId])
+  @@index([status, createdAt])
+}
+
+model VerificationRequest {
+  id           String        @id @default(cuid())
+  restaurantId String
+  requestedById String
+  status       RequestStatus @default(PENDING)
+  notes        String?
+  documentUrls String[]
+  reviewedById String?
+  reviewedAt   DateTime?
+  reviewNote   String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  restaurant  Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  requestedBy User       @relation("VerificationRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  reviewedBy  User?      @relation("VerificationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([restaurantId, status])
+  @@index([status, createdAt])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Categories (database-driven, never hardcoded in the UI)
+// ─────────────────────────────────────────────────────────────
+
+model Cuisine {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurants RestaurantCuisine[]
+}
+
+model RestaurantCuisine {
+  restaurantId String
+  cuisineId    String
+  isPrimary    Boolean @default(false)
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  cuisine    Cuisine    @relation(fields: [cuisineId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, cuisineId])
+  @@index([cuisineId])
+}
+
+model Vibe {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  slug      String   @unique
+  sortOrder Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurants RestaurantVibe[]
+}
+
+model RestaurantVibe {
+  restaurantId String
+  vibeId       String
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  vibe       Vibe       @relation(fields: [vibeId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, vibeId])
+  @@index([vibeId])
+}
+
+model Amenity {
+  id        String          @id @default(cuid())
+  name      String          @unique
+  slug      String          @unique
+  category  AmenityCategory @default(FACILITY)
+  sortOrder Int             @default(0)
+  isActive  Boolean         @default(true)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  restaurants RestaurantAmenity[]
+}
+
+model RestaurantAmenity {
+  restaurantId String
+  amenityId    String
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  amenity    Amenity    @relation(fields: [amenityId], references: [id], onDelete: Cascade)
+
+  @@id([restaurantId, amenityId])
+  @@index([amenityId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Opening hours
+// ─────────────────────────────────────────────────────────────
+
+// One row per opening period. A day can have several periods (e.g. lunch and
+// dinner). dayOfWeek: 0 = Sunday ... 6 = Saturday. Times are "HH:mm" in the
+// restaurant's city timezone. If closesAt is earlier than opensAt, the period
+// runs past midnight into the next day.
+model OpeningPeriod {
+  id           String  @id @default(cuid())
+  restaurantId String
+  dayOfWeek    Int
+  opensAt      String
+  closesAt     String
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, dayOfWeek])
+}
+
+// Overrides the weekly schedule for one calendar date (holiday or special).
+model SpecialHours {
+  id           String           @id @default(cuid())
+  restaurantId String
+  date         DateTime         @db.Date
+  type         SpecialHoursType @default(SPECIAL)
+  label        String?
+  isClosed     Boolean          @default(false)
+  opensAt      String?
+  closesAt     String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([restaurantId, date])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Menus (view only; prices are informational)
+// ─────────────────────────────────────────────────────────────
+
+model Menu {
+  id           String    @id @default(cuid())
+  restaurantId String
+  name         String
+  isActive     Boolean   @default(true)
+  sortOrder    Int       @default(0)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  restaurant Restaurant     @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  categories MenuCategory[]
+
+  @@index([restaurantId, isActive])
+}
+
+model MenuCategory {
+  id        String    @id @default(cuid())
+  menuId    String
+  name      String
+  sortOrder Int       @default(0)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  menu  Menu       @relation(fields: [menuId], references: [id], onDelete: Cascade)
+  items MenuItem[]
+
+  @@index([menuId, sortOrder])
+}
+
+model MenuItem {
+  id           String    @id @default(cuid())
+  categoryId   String
+  name         String
+  description  String?
+  price        Decimal   @db.Decimal(10, 2)
+  currency     String    @default("KES")
+  imageUrl     String?
+  dietaryTags  String[]
+  isAvailable  Boolean   @default(true)
+  isSpicy      Boolean   @default(false)
+  isFeatured   Boolean   @default(false)
+  sortOrder    Int       @default(0)
+  deletedAt    DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  category MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@index([categoryId, sortOrder])
+  @@index([name])
+}
+
+// ─────────────────────────────────────────────────────────────
+// User interaction
+// ─────────────────────────────────────────────────────────────
+
+model Favorite {
+  id           String   @id @default(cuid())
+  userId       String
+  restaurantId String
+  createdAt    DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, restaurantId])
+  @@index([restaurantId])
+}
+
+model RecentlyViewed {
+  id           String   @id @default(cuid())
+  userId       String
+  restaurantId String
+  viewedAt     DateTime @default(now())
+
+  user       User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, restaurantId])
+  @@index([userId, viewedAt])
+}
+
+// userId is optional so anonymous searches still feed "popular searches".
+model SearchHistory {
+  id          String   @id @default(cuid())
+  userId      String?
+  query       String
+  normalized  String
+  filters     Json?
+  resultCount Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt])
+  @@index([normalized])
+  @@index([createdAt])
+}
+
+// Preferred ids are stored as slug arrays (cuisines, areas, vibes, dietary).
+model UserPreference {
+  id                String      @id @default(cuid())
+  userId            String      @unique
+  budget            PriceRange?
+  cuisineSlugs      String[]
+  areaSlugs         String[]
+  vibeSlugs         String[]
+  dietary           String[]
+  notifyNewInArea   Boolean     @default(true)
+  notifyOffers      Boolean     @default(true)
+  notifyEvents      Boolean     @default(true)
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SavedLocation {
+  id        String   @id @default(cuid())
+  userId    String
+  label     String
+  areaId    String?
+  latitude  Float
+  longitude Float
+  createdAt DateTime @default(now())
+
+  user User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  area Area? @relation(fields: [areaId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Reviews
+// ─────────────────────────────────────────────────────────────
+
+// One review per user per restaurant (enforced by the unique constraint).
+// A user deleting their own review hard-deletes the row, so they can write a
+// new one later. Admin removal sets status = REMOVED and keeps the row.
+model Review {
+  id                  String       @id @default(cuid())
+  userId              String
+  restaurantId        String
+  rating              Int
+  title               String?
+  body                String
+  status              ReviewStatus @default(PUBLISHED)
+  helpfulCount        Int          @default(0)
+  ownerResponse       String?
+  ownerResponseAt     DateTime?
+  editedAt            DateTime?
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+
+  user       User       @relation("ReviewAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  images     ReviewImage[]
+  votes      ReviewHelpfulVote[]
+  reports    Report[]
+
+  @@unique([userId, restaurantId])
+  @@index([restaurantId, status, createdAt])
+  @@index([restaurantId, helpfulCount])
+}
+
+model ReviewImage {
+  id       String @id @default(cuid())
+  reviewId String
+  url      String
+  publicId String?
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+
+  @@index([reviewId])
+}
+
+model ReviewHelpfulVote {
+  id        String   @id @default(cuid())
+  reviewId  String
+  userId    String
+  createdAt DateTime @default(now())
+
+  review Review @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([reviewId, userId])
+  @@index([userId])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Discovery: offers and events (informational only)
+// ─────────────────────────────────────────────────────────────
+
+model Offer {
+  id           String           @id @default(cuid())
+  restaurantId String
+  title        String
+  description  String
+  terms        String?
+  imageUrl     String?
+  startsAt     DateTime
+  endsAt       DateTime
+  externalUrl  String?
+  contactInfo  String?
+  isFeatured   Boolean          @default(false)
+  isActive     Boolean          @default(true)
+  status       ModerationStatus @default(PENDING)
+  viewCount    Int              @default(0)
+  deletedAt    DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@index([status, isActive, endsAt])
+}
+
+model Event {
+  id           String           @id @default(cuid())
+  restaurantId String
+  title        String
+  description  String
+  category     EventCategory    @default(OTHER)
+  startsAt     DateTime
+  endsAt       DateTime?
+  imageUrl     String?
+  externalUrl  String?
+  isPublished  Boolean          @default(false)
+  status       ModerationStatus @default(PENDING)
+  viewCount    Int              @default(0)
+  deletedAt    DateTime?
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId])
+  @@index([status, isPublished, startsAt])
+  @@index([category])
+}
+
+// ─────────────────────────────────────────────────────────────
+// Platform
+// ─────────────────────────────────────────────────────────────
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  linkUrl   String?
+  readAt    DateTime?
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, readAt, createdAt])
+}
+
+model Report {
+  id             String           @id @default(cuid())
+  reporterId     String
+  targetType     ReportTargetType
+  reason         ReportReason
+  details        String?
+  status         ReportStatus     @default(OPEN)
+  restaurantId   String?
+  reviewId       String?
+  imageId        String?
+  resolvedById   String?
+  resolvedAt     DateTime?
+  resolutionNote String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  reporter   User             @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  resolvedBy User?            @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  restaurant Restaurant?      @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+  review     Review?          @relation(fields: [reviewId], references: [id], onDelete: Cascade)
+  image      RestaurantImage? @relation(fields: [imageId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([restaurantId])
+  @@index([reviewId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String?
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+// Discovery analytics (views, clicks, impressions). No sales data, ever.
+model AnalyticsEvent {
+  id           String             @id @default(cuid())
+  type         AnalyticsEventType
+  restaurantId String?
+  offerId      String?
+  eventId      String?
+  userId       String?
+  source       String?
+  createdAt    DateTime           @default(now())
+
+  restaurant Restaurant? @relation(fields: [restaurantId], references: [id], onDelete: Cascade)
+
+  @@index([restaurantId, type, createdAt])
+  @@index([type, createdAt])
+}
